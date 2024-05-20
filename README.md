@@ -1,0 +1,1 @@
+CodePatch is a comprehensive solution designed to enhance and extend the capabilities of various programming languages. By providing custom data structures and function helpers, CodePatch acts as a universal polyfill, filling in the gaps and addressing deficiencies across different coding environments.
