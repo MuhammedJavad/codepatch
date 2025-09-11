@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -275,7 +275,7 @@ func (c *Consumer) shouldReconnectOnError(ctx context.Context, err error) bool {
 	}
 
 	// Check for timeout errors (these are normal and don't require reconnection)
-	if kerr.IsTimeout() {
+	if kerr.Code() == kafka.ErrTimedOut {
 		c.l.DebugContext(ctx, "poll timeout", "error", err, "hint", "no new messages were received, or the connection was interrupted")
 		return false
 	}
