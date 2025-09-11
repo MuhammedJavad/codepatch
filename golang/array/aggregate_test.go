@@ -1,9 +1,26 @@
 package array
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
 )
+
+func TestChunk(t *testing.T) {
+	out := Chunk([]int{1, 2, 3, 4, 5}, 2)
+	want := [][]int{{1, 2}, {3, 4}, {5}}
+	if len(out) != len(want) {
+		t.Fatalf("unexpected length: got %d want %d", len(out), len(want))
+	}
+	for i := range want {
+		if len(out[i]) != len(want[i]) {
+			t.Fatalf("chunk %d: got %v want %v", i, out[i], want[i])
+		}
+		for j := range want[i] {
+			if out[i][j] != want[i][j] {
+				t.Fatalf("elem (%d,%d): got %d want %d", i, j, out[i][j], want[i][j])
+			}
+		}
+	}
+}
 
 func TestSum_WithNumberArray_ShouldBeAsExpected(t *testing.T) {
 	// Arrange
@@ -14,7 +31,9 @@ func TestSum_WithNumberArray_ShouldBeAsExpected(t *testing.T) {
 	})
 	// Assert
 	const expected = 55
-	assert.True(t, r == expected)
+	if r != expected {
+		t.Fatalf("got %v want %v", r, expected)
+	}
 }
 
 func TestSum_WithStructArray_ShouldBeAsExpected(t *testing.T) {
@@ -26,5 +45,7 @@ func TestSum_WithStructArray_ShouldBeAsExpected(t *testing.T) {
 	})
 	// Assert
 	const expected = 10.021
-	assert.True(t, r == expected)
+	if r != expected {
+		t.Fatalf("got %v want %v", r, expected)
+	}
 }

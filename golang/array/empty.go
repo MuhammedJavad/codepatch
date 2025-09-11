@@ -1,5 +1,6 @@
 package array
 
+// IsEmpty reports whether arr has zero elements. It is safe for nil slices.
 func IsEmpty[TIn any](arr []TIn) bool {
-	return arr == nil || len(arr) <= 0
+	return len(arr) == 0
 }
