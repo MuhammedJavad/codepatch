@@ -29,7 +29,7 @@ type (
 		Id        string
 	}
 	Consumer struct {
-		appname         string
+		groupId         string
 		c               *kafka.Consumer
 		l               *slog.Logger
 		latency         *prometheus.HistogramVec // Tracks how long it takes to process a message.
@@ -48,7 +48,7 @@ type (
 
 func NewConsumer(
 	servers []string,
-	username, password, appname string,
+	username, password, groupId string,
 	l *slog.Logger, maxRetries int, interval time.Duration) (*Consumer, error) {
 
 	client := &Consumer{
@@ -75,7 +75,7 @@ func NewConsumer(
 			},
 			[]string{"appname", "status"},
 		),
-		appname:    appname,
+		groupId:    groupId,
 		handlers:   make(map[string]handler),
 		servers:    servers,
 		username:   username,
@@ -104,7 +104,7 @@ func (c *Consumer) connect() error {
 
 	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers":    strings.Join(c.servers, ","),
-		"group.id":             c.appname,
+		"group.id":             c.groupId,
 		"enable.auto.commit":   false,
 		"auto.offset.reset":    "latest", // or "earliest"
 		"enable.partition.eof": false,
@@ -118,39 +118,29 @@ func (c *Consumer) connect() error {
 	})
 	if err != nil {
 		c.connected = false
-		c.connectionState.WithLabelValues(c.appname).Set(0)
+		c.connectionState.WithLabelValues(c.groupId).Set(0)
 		return err
 	}
 
 	c.c = consumer
-	c.connected = true
-	c.connectionState.WithLabelValues(c.appname).Set(1)
-	c.l.InfoContext(context.Background(), "kafka connected successfully", "appname", c.appname)
 
 	// Re-subscribe to all topics
-	for topic := range c.handlers {
-		if err := c.c.SubscribeTopics([]string{topic}, nil); err != nil {
-			c.l.ErrorContext(context.Background(), "failed to resubscribe to topic", "topic", topic, "error", err)
-		}
+	if err := c.subscribeTopicsInternal(); err != nil {
+		return err
 	}
+
+	c.connected = true
+	c.connectionState.WithLabelValues(c.groupId).Set(1)
+	c.l.Info("[kafka] connected successfully", "appname", c.groupId)
 
 	return nil
 }
 
-func (c *Consumer) SubscribeTopics(topic, name string, h handlerFunc) error {
+func (c *Consumer) SubscribeTopic(topic, name string, h handlerFunc) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, ok := c.handlers[topic]; ok {
-		return fmt.Errorf("topic %s has already a registered handler", topic)
-	}
-
-	if err := c.c.SubscribeTopics([]string{topic}, nil); err != nil {
-		return err
-	}
-
 	c.handlers[topic] = handler{name: name, executor: h}
-	return nil
 }
 
 func (c *Consumer) Close() error {
@@ -168,7 +158,7 @@ func (c *Consumer) Close() error {
 		delete(c.handlers, k)
 	}
 	c.connected = false
-	c.connectionState.WithLabelValues(c.appname).Set(0)
+	c.connectionState.WithLabelValues(c.groupId).Set(0)
 
 	return nil
 }
@@ -179,7 +169,11 @@ func (c *Consumer) IsConnected() bool {
 	return c.connected
 }
 
-func (c *Consumer) Listen(ctx context.Context) {
+func (c *Consumer) Listen(ctx context.Context) error {
+	if err := c.subscribeTopicsInternal(); err != nil {
+		return err
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -187,7 +181,7 @@ func (c *Consumer) Listen(ctx context.Context) {
 			if err := c.Close(); err != nil {
 				c.l.ErrorContext(ctx, "an error occurred while closing the consumer", "error", err)
 			}
-			return
+			return nil
 
 		default:
 			if !c.IsConnected() {
@@ -240,6 +234,16 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 	ctx = context.WithValue(ctx, "method", h.name)
 	var err error
 
+	// Log the start of processing with correlation fields
+	c.l.InfoContext(ctx, "processing message",
+		"group_id", c.groupId,
+		"request_id", rid,
+		"method", h.name,
+		"topic", topic,
+		"partition", msg.TopicPartition.Partition,
+		"offset", msg.TopicPartition.Offset,
+	)
+
 	defer func() {
 		c.latency.WithLabelValues(h.name, strconv.FormatBool(err != nil)).Observe(time.Since(start).Seconds())
 	}()
@@ -253,17 +257,37 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 		Id:        fmt.Sprintf("%d.%d", msg.TopicPartition.Partition, msg.TopicPartition.Offset),
 	}
 	if err = h.executor(ctx, m); err != nil {
-		c.l.ErrorContext(ctx, "handler error", "topic", topic, "offset", msg.TopicPartition.Offset, "error", err)
+		c.l.ErrorContext(ctx, "handler error",
+			"group_id", c.groupId,
+			"request_id", rid,
+			"method", h.name,
+			"topic", topic,
+			"offset", msg.TopicPartition.Offset,
+			"error", err,
+		)
 		return
 	}
 
 	_, err = c.c.CommitMessage(msg)
 	if err != nil {
-		c.l.ErrorContext(ctx, "failed to commit message", "topic", topic, "offset", msg.TopicPartition.Offset, "error", err)
+		c.l.ErrorContext(ctx, "failed to commit message",
+			"group_id", c.groupId,
+			"request_id", rid,
+			"method", h.name,
+			"topic", topic,
+			"offset", msg.TopicPartition.Offset,
+			"error", err,
+		)
 		return
 	}
 
-	c.l.InfoContext(ctx, "committed message", "topic", topic, "offset", msg.TopicPartition.Offset)
+	c.l.InfoContext(ctx, "committed message",
+		"group_id", c.groupId,
+		"request_id", rid,
+		"method", h.name,
+		"topic", topic,
+		"offset", msg.TopicPartition.Offset,
+	)
 }
 
 // shouldReconnectOnError determines if an error indicates a connection issue that requires reconnection
@@ -393,12 +417,12 @@ func (c *Consumer) reconnect() error {
 		// Check if we've exceeded max retries
 		if c.maxRetries > 0 && attempt > c.maxRetries {
 			c.l.ErrorContext(ctx, "max reconnection attempts exceeded", "attempts", attempt-1)
-			c.reconnectCount.WithLabelValues(c.appname, "failed").Inc()
+			c.reconnectCount.WithLabelValues(c.groupId, "failed").Inc()
 			return fmt.Errorf("max reconnection attempts (%d) exceeded", c.maxRetries)
 		}
 
 		c.l.InfoContext(ctx, "attempting to reconnect", "attempt", attempt, "interval", c.interval)
-		c.reconnectCount.WithLabelValues(c.appname, "attempt").Inc()
+		c.reconnectCount.WithLabelValues(c.groupId, "attempt").Inc()
 
 		if err := c.connect(); err != nil {
 			c.l.ErrorContext(ctx, "reconnection failed", "attempt", attempt, "error", err)
@@ -407,7 +431,19 @@ func (c *Consumer) reconnect() error {
 		}
 
 		c.l.InfoContext(ctx, "reconnected successfully", "attempt", attempt)
-		c.reconnectCount.WithLabelValues(c.appname, "success").Inc()
+		c.reconnectCount.WithLabelValues(c.groupId, "success").Inc()
 		return nil
 	}
+}
+
+func (c *Consumer) subscribeTopicsInternal() error {
+	if len(c.handlers) == 0 {
+		return nil
+	}
+
+	topics := make([]string, 0, len(c.handlers))
+	for topic := range c.handlers {
+		topics = append(topics, topic)
+	}
+	return c.c.SubscribeTopics(topics, nil)
 }
