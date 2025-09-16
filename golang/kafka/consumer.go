@@ -20,13 +20,15 @@ type (
 		executor handlerFunc
 		name     string
 	}
-	Message struct {
-		Data      []byte
-		Topic     string
-		Offset    int64
-		Partition int32
-		Timestamp time.Time
-		Id        string
+	TimestampType string
+	Message       struct {
+		Data          []byte
+		Topic         string
+		Offset        int64
+		Partition     int32
+		Timestamp     time.Time
+		TimestampType TimestampType
+		Id            string
 	}
 	Consumer struct {
 		groupId         string
@@ -44,6 +46,12 @@ type (
 		maxRetries      int           // Maximum number of reconnection attempts (0 = infinite)
 		interval        time.Duration // Delay between reconnection attempts
 	}
+)
+
+const (
+	TimestampCreateTime    TimestampType = "CreateTime"
+	TimestampLogAppendTime TimestampType = "LogAppendTime"
+	TimestampNotAvailable  TimestampType = "NotAvailable"
 )
 
 func NewConsumer(
@@ -131,7 +139,7 @@ func (c *Consumer) connect() error {
 
 	c.connected = true
 	c.connectionState.WithLabelValues(c.groupId).Set(1)
-	c.l.Info("[kafka] connected successfully", "appname", c.groupId)
+	c.l.Info("[kafka] connected successfully", "groupId", c.groupId)
 
 	return nil
 }
@@ -249,12 +257,13 @@ func (c *Consumer) handleMessage(ctx context.Context, msg *kafka.Message) {
 	}()
 
 	m := Message{
-		Data:      msg.Value,
-		Topic:     topic,
-		Offset:    int64(msg.TopicPartition.Offset),
-		Partition: msg.TopicPartition.Partition,
-		Timestamp: msg.Timestamp,
-		Id:        fmt.Sprintf("%d.%d", msg.TopicPartition.Partition, msg.TopicPartition.Offset),
+		Data:          msg.Value,
+		Topic:         topic,
+		Offset:        int64(msg.TopicPartition.Offset),
+		Partition:     msg.TopicPartition.Partition,
+		Timestamp:     msg.Timestamp,
+		TimestampType: TimestampType(msg.TimestampType.String()),
+		Id:            fmt.Sprintf("%d.%d", msg.TopicPartition.Partition, msg.TopicPartition.Offset),
 	}
 	if err = h.executor(ctx, m); err != nil {
 		c.l.ErrorContext(ctx, "handler error",
