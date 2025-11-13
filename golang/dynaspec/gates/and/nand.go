@@ -7,15 +7,19 @@ const NandGate = "nand"
 // Nand implements logical AND over negated children
 type Nand struct{}
 
-func (a Nand) IsSatisfied(n tree.Node, value interface{}) bool {
+func (a Nand) IsSatisfied(n tree.Node, value interface{}) (bool, error) {
 	next := n.Next()
 	for {
 		node, ok := next()
 		if !ok {
-			return true
+			return true, nil
 		}
-		if node.IsSatisfied(value) {
-			return false
+		satisfied, err := node.IsSatisfied(value)
+		if err != nil {
+			return false, err
+		}
+		if satisfied {
+			return false, nil
 		}
 	}
 }

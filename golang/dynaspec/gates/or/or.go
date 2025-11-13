@@ -6,15 +6,19 @@ const OrGate = "or"
 
 type Or struct{}
 
-func (o Or) IsSatisfied(n tree.Node, value interface{}) bool {
+func (o Or) IsSatisfied(n tree.Node, value interface{}) (bool, error) {
 	next := n.Next()
 	for {
 		node, ok := next()
 		if !ok {
-			return false
+			return false, nil
 		}
-		if node.IsSatisfied(value) {
-			return true
+		satisfied, err := node.IsSatisfied(value)
+		if err != nil {
+			return false, err
+		}
+		if satisfied {
+			return true, nil
 		}
 	}
 }

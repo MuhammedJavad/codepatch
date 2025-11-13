@@ -6,7 +6,7 @@ const XnorGate = "xnor"
 
 type Xnor struct{}
 
-func (x Xnor) IsSatisfied(n tree.Node, value interface{}) bool {
+func (x Xnor) IsSatisfied(n tree.Node, value interface{}) (bool, error) {
 	next := n.Next()
 	trueCount := 0
 	for {
@@ -14,10 +14,14 @@ func (x Xnor) IsSatisfied(n tree.Node, value interface{}) bool {
 		if !ok {
 			break
 		}
-		if node.IsSatisfied(value) {
+		satisfied, err := node.IsSatisfied(value)
+		if err != nil {
+			return false, err
+		}
+		if satisfied {
 			trueCount++
 		}
 	}
 	// XNOR over multiple operands: true if an even number of children are true
-	return trueCount%2 == 0
+	return trueCount%2 == 0, nil
 }

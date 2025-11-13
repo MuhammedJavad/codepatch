@@ -6,7 +6,7 @@ const AndGate = "and"
 
 type And struct{}
 
-func (a And) IsSatisfied(n tree.Node, value interface{}) bool {
+func (a And) IsSatisfied(n tree.Node, value interface{}) (bool, error) {
 	next := n.Next()
 	for {
 		node, ok := next()
@@ -14,10 +14,14 @@ func (a And) IsSatisfied(n tree.Node, value interface{}) bool {
 			// end of the tree
 			// we return a true flag
 			// indicating that all nodes are satisfied
-			return true
+			return true, nil
 		}
-		if !node.IsSatisfied(value) {
-			return false
+		satisfied, err := node.IsSatisfied(value)
+		if err != nil {
+			return false, err
+		}
+		if !satisfied {
+			return false, nil
 		}
 	}
 }

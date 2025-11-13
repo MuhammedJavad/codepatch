@@ -61,15 +61,40 @@ A `Tree` contains the following fields:
 
 ## Accessor
 
-Accessors are abstractions that handle saving, loading, and managing tree structures. They provide persistence for trees.
+Accessors are abstractions that handle saving, loading, and managing tree structures. They provide persistence for trees. Below is a sample schema to represent an entire tree structure in a relational database:
 
-The default MySQL accessor stores trees using JSON columns, so make sure to run the database migration before use. You can:
+```sql
+CREATE TABLE trees (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  name VARCHAR(255) NOT NULL,
+  start_time TIMESTAMP NULL,
+  end_time TIMESTAMP NULL,
+  result JSON NOT NULL,
+  structure JSON NOT NULL, -- stores the Node tree structure
+  INDEX idx_trees_created_at (created_at),
+  INDEX idx_trees_active (active)
+);
+```
 
-- Use the [built-in MySQL accessor](../accessor/mysql/readme.md), or
+#### Benefits
 
-- Implement your own to persist trees in any storage format.
+* **Fast reads** for the entire tree.
+* **No recursive joins** or closure tables required.
+* **Simple caching** in Redis or the application layer.
+* Ideal for cases where trees are **constructed once** and **read frequently**.
 
-**All fields in the Tree and Node structs are exported to support custom persistence implementations**
+#### Trade-offs
+
+* Querying specific nodes with SQL is **not efficient**.
+* **Full JSON updates** are required when a node changes.
+
+In this design, trees are **deleted and re-inserted** on updates, so updating the JSON blob is not an issue.
+Direct node querying is unnecessary since all important data and states are available in the `trees` table.
+This approach provides **excellent read performance** and **cacheability**, which aligns with the main use case.
+
+> **All fields in the Tree and Node structs are exported to support custom persistence implementations**
 
 
 ## Example Use Case

@@ -1,8 +1,8 @@
 package tree
 
 import (
-	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -11,27 +11,79 @@ type builder struct {
 	tree Tree
 	err  error
 }
+type TreeModel struct {
+	Result    float32    `json:"result"`
+	StartTime *time.Time `json:"start_time"`
+	EndTime   *time.Time `json:"end_time"`
+	Root      NodeModel  `json:"root"`
+}
+type NodeModel struct {
+	Operator string      `json:"operator"`
+	Operand  string      `json:"operand"`
+	Children []NodeModel `json:"children"`
+}
+
+func BuildFromModel(model TreeModel) (Tree, error) {
+	return Builder(model.Result).
+		WithStartTime(model.StartTime).
+		WithEndTime(model.EndTime).
+		WithRoot(func(nb *NodeBuilder) {
+			buildRoot(nb, model.Root)
+		}).
+		Build()
+}
+
+func buildRoot(nb *NodeBuilder, n NodeModel) {
+	if len(n.Children) <= 0 {
+		nb.AsCondition(n.Operator, n.Operand)
+		return
+	}
+
+	nb.AsGate(n.Operator, func(gb *GateBuilder) {
+		for _, child := range n.Children {
+			buildChild(gb, child)
+		}
+	})
+}
+
+func buildChild(gb *GateBuilder, c NodeModel) {
+	if len(c.Children) <= 0 {
+		gb.AddCondition(c.Operator, c.Operand)
+		return
+	}
+
+	gb.AddGate(c.Operator, func(childGb *GateBuilder) {
+		for _, grandChild := range c.Children {
+			buildChild(childGb, grandChild)
+		}
+	})
+}
 
 // Builder creates a new tree builder
-func Builder(name string, result json.RawMessage) *builder {
+func Builder(result float32) *builder {
 	return &builder{
 		tree: Tree{
-			Name:   name,
-			Result: result,
 			Active: true,
+			Result: result,
 		},
 	}
 }
 
 // WithStartTime sets the start time for the tree
-func (tb *builder) WithStartTime(start time.Time) *builder {
-	tb.tree.Start = &start
+func (tb *builder) WithStartTime(start *time.Time) *builder {
+	if start == nil {
+		return tb
+	}
+	tb.tree.Start = start
 	return tb
 }
 
 // WithEndTime sets the end time for the tree
-func (tb *builder) WithEndTime(end time.Time) *builder {
-	tb.tree.End = &end
+func (tb *builder) WithEndTime(end *time.Time) *builder {
+	if end == nil {
+		return tb
+	}
+	tb.tree.End = end
 	return tb
 }
 
@@ -39,7 +91,7 @@ func (tb *builder) WithEndTime(end time.Time) *builder {
 func (tb *builder) WithRoot(builder func(*NodeBuilder)) *builder {
 	nb := &NodeBuilder{}
 	builder(nb)
-	root, err := nb.Build()
+	root, err := nb.build()
 	if err != nil {
 		tb.err = err
 		return tb
@@ -49,21 +101,35 @@ func (tb *builder) WithRoot(builder func(*NodeBuilder)) *builder {
 }
 
 // Build validates and returns the built tree
-func (tb *builder) Build() (*Tree, error) {
+func (tb *builder) Build() (Tree, error) {
 	if tb.err != nil {
-		return nil, tb.err
+		return Tree{}, tb.err
 	}
 
-	if tb.tree.Root.isEmpty() {
-		return nil, errors.New("root node is required")
+	if tb.tree.Root.IsEmpty() {
+		return Tree{}, errors.New("root node is required")
 	}
 
 	// Validate time range
 	if tb.tree.Start != nil && tb.tree.End != nil && tb.tree.Start.After(*tb.tree.End) {
-		return nil, errors.New("start time cannot be after end time")
+		return Tree{}, errors.New("start time cannot be after end time")
 	}
 
-	return &tb.tree, nil
+	if tb.tree.End != nil {
+		tb.tree.Active = true
+		// first check the end time
+		// it determines that tree is active or not
+	} else if tb.tree.Start != nil {
+		tb.tree.Active = false
+		// having start time means that tree is not active yet
+		// an scheduler should check the date periodically
+		// and update the active status
+	} else {
+		tb.tree.Active = true
+		// no start time and end time means that tree is active fir ever
+	}
+
+	return tb.tree, nil
 }
 
 // NodeBuilder provides a fluent interface for building nodes
@@ -79,6 +145,11 @@ func (nb *NodeBuilder) AsCondition(operator, operand string) *NodeBuilder {
 		return nb
 	}
 
+	if !reg.IsCondition(operator) {
+		nb.err = fmt.Errorf("invalid condition operator: %s. Valid conditions are: %v", operator, reg.ConditionOperators())
+		return nb
+	}
+
 	nb.node = Node{
 		NodeType: NodeTypeCondition,
 		Operator: operator,
@@ -88,27 +159,18 @@ func (nb *NodeBuilder) AsCondition(operator, operand string) *NodeBuilder {
 	return nb
 }
 
-var validGates = map[string]bool{
-	"and":  true,
-	"or":   true,
-	"xor":  true,
-	"xnor": true,
-	"nand": true,
-	"nor":  true,
-}
-
 // AsGate creates a gate node with children
 // Gate creates a gate node with children (legacy method)
 func (nb *NodeBuilder) AsGate(g string, builder func(*GateBuilder)) *NodeBuilder {
-	if !validGates[g] {
-		nb.err = errors.New("invalid gate operator")
+	if !reg.IsGate(g) {
+		nb.err = fmt.Errorf("invalid gate operator: %s. Valid gates are: %v", g, reg.GateOperators())
 		return nb
 	}
 	gb := &GateBuilder{
 		gate: g,
 	}
 	builder(gb)
-	node, err := gb.Build()
+	node, err := gb.build()
 	if err != nil {
 		nb.err = err
 		return nb
@@ -117,8 +179,8 @@ func (nb *NodeBuilder) AsGate(g string, builder func(*GateBuilder)) *NodeBuilder
 	return nb
 }
 
-// Build returns the built node
-func (nb *NodeBuilder) Build() (Node, error) {
+// build returns the built node
+func (nb *NodeBuilder) build() (Node, error) {
 	if nb.err != nil {
 		return Node{}, nb.err
 	}
@@ -141,7 +203,7 @@ type GateBuilder struct {
 func (gb *GateBuilder) AddCondition(operator, operand string) {
 	nb := &NodeBuilder{}
 	nb.AsCondition(operator, operand)
-	node, err := nb.Build()
+	node, err := nb.build()
 	if err != nil {
 		gb.internalErr = err
 		return
@@ -152,7 +214,7 @@ func (gb *GateBuilder) AddCondition(operator, operand string) {
 func (gb *GateBuilder) AddGate(g string, builder func(*GateBuilder)) {
 	nb := &NodeBuilder{}
 	nb.AsGate(g, builder)
-	node, err := nb.Build()
+	node, err := nb.build()
 	if err != nil {
 		gb.internalErr = err
 		return
@@ -161,7 +223,7 @@ func (gb *GateBuilder) AddGate(g string, builder func(*GateBuilder)) {
 }
 
 // Build creates the gate node
-func (gb *GateBuilder) Build() (Node, error) {
+func (gb *GateBuilder) build() (Node, error) {
 	if gb.internalErr != nil {
 		return Node{}, gb.internalErr
 	}

@@ -2,24 +2,21 @@ package docs
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/MuhammedJavad/codepatch/dynaspec"
-
-	acc "github.com/MuhammedJavad/codepatch/dynaspec/accessor/mysql"
-	"github.com/MuhammedJavad/codepatch/dynaspec/tree"
+	dynar "github.com/MuhammedJavad/codepatch/dynaspec/registrar"
+	dyna "github.com/MuhammedJavad/codepatch/dynaspec/tree"
 )
 
 type CustomerIdMustBeInCondition struct{}
 type QuantityMustBeGreaterThanCondition struct{}
 type ProductIdMustBeInCondition struct{}
 
-func (c CustomerIdMustBeInCondition) IsSatisfied(n tree.Node, value interface{}) bool {
+func (c CustomerIdMustBeInCondition) IsSatisfied(n tree.Node, value interface{}) (bool, error) {
 	expectedIds := strings.Split(n.Operand, ",")
 
 	for _, op := range expectedIds {
@@ -28,22 +25,22 @@ func (c CustomerIdMustBeInCondition) IsSatisfied(n tree.Node, value interface{})
 			continue
 		}
 		if value.(Order).CustomerID == uint(expected) {
-			return true
+			return true, nil
 		}
 	}
 
-	return false
+	return false, nil
 }
 
-func (c QuantityMustBeGreaterThanCondition) IsSatisfied(n tree.Node, value interface{}) bool {
+func (c QuantityMustBeGreaterThanCondition) IsSatisfied(n tree.Node, value interface{}) (bool, error) {
 	expected, err := strconv.Atoi(n.Operand)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return value.(Order).Quantity > uint(expected)
+	return value.(Order).Quantity > uint(expected), nil
 }
 
-func (c ProductIdMustBeInCondition) IsSatisfied(n tree.Node, value interface{}) bool {
+func (c ProductIdMustBeInCondition) IsSatisfied(n tree.Node, value interface{}) (bool, error) {
 	expectedIds := strings.Split(n.Operand, ",")
 	for _, op := range expectedIds {
 		expected, err := strconv.Atoi(strings.TrimSpace(op))
@@ -51,10 +48,10 @@ func (c ProductIdMustBeInCondition) IsSatisfied(n tree.Node, value interface{}) 
 			continue
 		}
 		if value.(Order).ProductID == uint(expected) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 type Order struct {
@@ -64,22 +61,26 @@ type Order struct {
 }
 
 func main() {
-	dynaspec.Register(
-		dynaspec.Use("customerIdMustBeIn", CustomerIdMustBeInCondition{}),
-		dynaspec.Use("quantityMustBeGreaterThan", QuantityMustBeGreaterThanCondition{}),
-		dynaspec.Use("productIdMustBeIn", ProductIdMustBeInCondition{}))
+	dynar.Register(
+		dynar.Use("customerIdMustBeIn", CustomerIdMustBeInCondition{}),
+		dynar.Use("quantityMustBeGreaterThan", QuantityMustBeGreaterThanCondition{}),
+		dynar.Use("productIdMustBeIn", ProductIdMustBeInCondition{}))
 
-	db, err := sql.Open("postgres", "user=postgres password=postgres dbname=postgres sslmode=disable")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
+	now := time.Now()
+	end := now.Add(time.Hour * 24)
 
-	accessor := acc.New(db)
-	// get the tree from the accessor
-	tree, err := accessor.Get(context.Background(), 1)
+	tree, err := dyna.Builder(1.0).
+		WithStartTime(&now).
+		WithEndTime(&end).
+		WithRoot(func(nb *dyna.NodeBuilder) {
+			nb.AsGate("and", func(gb *dyna.GateBuilder) {
+				gb.AddCondition("quantityMustBeGreaterThan", "10")
+			})
+		}).
+		Build()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("Error building tree: %v\n", err)
+		return
 	}
 
 	order := Order{
@@ -87,24 +88,29 @@ func main() {
 		ProductID:  1234,
 		Quantity:   1,
 	}
-	if tree.Traverse(order) {
+	if satisfied, err := tree.Traverse(order); err != nil {
+		fmt.Printf("Error traversing tree: %v\n", err)
+	} else if satisfied {
 		fmt.Printf("Tree is satisfied. [result: %v]\n", tree.Result)
-	} else {
-		fmt.Println("Tree is not satisfied")
 	}
+
 }
 
 func builderExample() {
-	_ = tree.Builder("example", nil).
-		WithStartTime(time.Now()).
-		WithEndTime(time.Now().Add(time.Hour * 24)).
-		WithRoot(func(nb *tree.NodeBuilder) {
-			nb.AsGate("and", func(gb *tree.GateBuilder) {
+	now := time.Now()
+	end := now.Add(time.Hour * 24)
+
+	_, _ = dyna.Builder(1.0).
+		WithStartTime(&now).
+		WithEndTime(&end).
+		WithRoot(func(nb *dyna.NodeBuilder) {
+			nb.AsGate("and", func(gb *dyna.GateBuilder) {
 				gb.AddCondition("quantityMustBeGreaterThan", "10")
-				gb.AddGate("or", func(gb *tree.GateBuilder) {
+				gb.AddGate("or", func(gb *dyna.GateBuilder) {
 					gb.AddCondition("productIdMustBeIn", "1234")
 					gb.AddCondition("productIdMustBeIn", "1234")
 				})
 			})
-		})
+		}).
+		Build()
 }

@@ -6,7 +6,7 @@ const XorGate = "xor"
 
 type Xor struct{}
 
-func (x Xor) IsSatisfied(n tree.Node, value interface{}) bool {
+func (x Xor) IsSatisfied(n tree.Node, value interface{}) (bool, error) {
 	next := n.Next()
 	trueCount := 0
 	for {
@@ -14,10 +14,14 @@ func (x Xor) IsSatisfied(n tree.Node, value interface{}) bool {
 		if !ok {
 			break
 		}
-		if node.IsSatisfied(value) {
+		satisfied, err := node.IsSatisfied(value)
+		if err != nil {
+			return false, err
+		}
+		if satisfied {
 			trueCount++
 		}
 	}
 	// XOR over multiple operands: true if an odd number of children are true
-	return trueCount%2 == 1
+	return trueCount%2 == 1, nil
 }
