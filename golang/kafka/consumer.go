@@ -92,11 +92,12 @@ func NewConsumer(
 		interval:   interval,
 		connected:  false,
 	}
-	prometheus.MustRegister(client.latency, client.connectionState, client.reconnectCount)
-
+	
 	if err := client.connect(); err != nil {
 		return nil, err
 	}
+	
+	prometheus.MustRegister(client.latency, client.connectionState, client.reconnectCount)
 
 	return client, nil
 }
